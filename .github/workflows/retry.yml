@@ -1,0 +1,50 @@
+name: Inside Camarilla Retry
+
+on:
+  schedule:
+    - cron: "30 12 * * 1-5"
+  workflow_dispatch:
+
+jobs:
+  retry:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install requests pandas
+
+      - name: Retry scanner every 10 minutes
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          for i in {1..37}
+          do
+            echo "========================================"
+            echo "Attempt $i of 37"
+            date
+            echo "========================================"
+
+            if python scanner.py; then
+              echo "SUCCESS - NSE data received and Telegram sent."
+              exit 0
+            fi
+
+            echo "Data not available yet."
+            echo "Waiting 10 minutes before next attempt..."
+
+            if [ "$i" -lt 37 ]; then
+              sleep 600
+            fi
+          done
+
+          echo "NSE data was not available during retry window."
+          exit 1
