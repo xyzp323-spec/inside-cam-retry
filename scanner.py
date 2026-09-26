@@ -15,28 +15,48 @@ TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
 def get_session():
     session = requests.Session()
+
     session.headers.update({
-        "User-Agent": "Mozilla/5.0",
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/140.0.0.0 Safari/537.36"
+        ),
         "Accept": "*/*",
         "Accept-Language": "en-US,en;q=0.9",
         "Referer": "https://www.nseindia.com/",
+        "Connection": "keep-alive",
     })
+
+    # Establish NSE session first
+    try:
+        session.get("https://www.nseindia.com/", timeout=30)
+    except Exception as e:
+        print(f"NSE homepage session warning: {e}")
+
     return session
 
 
 def get_bhavcopy(session, date):
-    date_text = date.strftime("%d%m%Y")
+    date_text = date.strftime("%Y%m%d")
 
+    # Official NSE UDiFF CM Bhavcopy URL
     url = (
         "https://nsearchives.nseindia.com/content/cm/"
         f"BhavCopy_NSE_CM_0_0_0_{date_text}_F_0000.csv.zip"
     )
 
+    print(f"Downloading Bhavcopy: {date}")
+    print(f"URL: {url}")
+
     response = session.get(url, timeout=30)
+
+    print(f"HTTP status: {response.status_code}")
 
     if response.status_code != 200:
         raise RuntimeError(
-            f"Bhavcopy not available for {date}: HTTP {response.status_code}"
+            f"Bhavcopy not available for {date}: "
+            f"HTTP {response.status_code}"
         )
 
     if not response.content[:2] == b"PK":
@@ -45,19 +65,31 @@ def get_bhavcopy(session, date):
         )
 
     with zipfile.ZipFile(io.BytesIO(response.content)) as z:
-        csv_files = [x for x in z.namelist() if x.lower().endswith(".csv")]
+        csv_files = [
+            name
+            for name in z.namelist()
+            if name.lower().endswith(".csv")
+        ]
 
         if not csv_files:
-            raise RuntimeError(f"No CSV found in Bhavcopy for {date}")
+            raise RuntimeError(
+                f"No CSV found inside Bhavcopy for {date}"
+            )
+
+        print(f"CSV inside ZIP: {csv_files[0]}")
 
         with z.open(csv_files[0]) as f:
             df = pd.read_csv(f)
+
+    print(f"Bhavcopy rows: {len(df)}")
 
     return df
 
 
 def get_fo_universe(session):
     url = "https://nsearchives.nseindia.com/content/fo/fo_mktlots.csv"
+
+    print("Downloading F&O universe...")
 
     response = session.get(url, timeout=30)
 
@@ -77,7 +109,8 @@ def get_fo_universe(session):
 
     if symbol_col is None:
         raise RuntimeError(
-            f"Could not find SYMBOL column in F&O universe. Columns: {list(df.columns)}"
+            "Could not find SYMBOL column in F&O universe. "
+            f"Columns: {list(df.columns)}"
         )
 
     symbols = (
@@ -90,6 +123,8 @@ def get_fo_universe(session):
         .tolist()
     )
 
+    print(f"F&O symbols found: {len(symbols)}")
+
     return set(symbols)
 
 
@@ -101,24 +136,58 @@ def normalize_columns(df):
     for col in df.columns:
         c = str(col).strip().upper()
 
-        if c in ["TCKR", "TCKR.SYMBOL", "SYMBOL", "SYMBOL_"]:
+        if c in [
+            "TCKR",
+            "TCKR.SYMBOL",
+            "SYMBOL",
+            "SYMBOL_",
+            "TCKR SYMBOL",
+        ]:
             rename_map[col] = "SYMBOL"
-        elif c in ["H_PRIC", "HIGH", "HIGH_PRICE"]:
+
+        elif c in [
+            "H_PRIC",
+            "HIGH",
+            "HIGH_PRICE",
+            "HIGH PRICE",
+        ]:
             rename_map[col] = "HIGH"
-        elif c in ["L_PRIC", "LOW", "LOW_PRICE"]:
+
+        elif c in [
+            "L_PRIC",
+            "LOW",
+            "LOW_PRICE",
+            "LOW PRICE",
+        ]:
             rename_map[col] = "LOW"
-        elif c in ["CLOSE_PRIC", "CLOSE", "CLOSE_PRICE"]:
+
+        elif c in [
+            "CLOSE_PRIC",
+            "CLOSE",
+            "CLOSE_PRICE",
+            "CLOSE PRICE",
+        ]:
             rename_map[col] = "CLOSE"
 
     df = df.rename(columns=rename_map)
 
-    required = ["SYMBOL", "HIGH", "LOW", "CLOSE"]
+    required = [
+        "SYMBOL",
+        "HIGH",
+        "LOW",
+        "CLOSE",
+    ]
 
-    missing = [x for x in required if x not in df.columns]
+    missing = [
+        col
+        for col in required
+        if col not in df.columns
+    ]
 
     if missing:
         raise RuntimeError(
-            f"Required columns missing: {missing}. Actual columns: {list(df.columns)}"
+            f"Required columns missing: {missing}. "
+            f"Actual columns: {list(df.columns)}"
         )
 
     return df
@@ -134,10 +203,24 @@ def prepare_day(df):
         .str.upper()
     )
 
-    for col in ["HIGH", "LOW", "CLOSE"]:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
+    for col in [
+        "HIGH",
+        "LOW",
+        "CLOSE",
+    ]:
+        df[col] = pd.to_numeric(
+            df[col],
+            errors="coerce"
+        )
 
-    df = df.dropna(subset=["SYMBOL", "HIGH", "LOW", "CLOSE"])
+    df = df.dropna(
+        subset=[
+            "SYMBOL",
+            "HIGH",
+            "LOW",
+            "CLOSE",
+        ]
+    )
 
     return df
 
@@ -145,17 +228,25 @@ def prepare_day(df):
 def calculate_camarilla(df):
     df = df.copy()
 
-    rng = df["HIGH"] - df["LOW"]
+    price_range = df["HIGH"] - df["LOW"]
 
-    df["H4"] = df["CLOSE"] + (rng * 1.1 / 2)
-    df["L4"] = df["CLOSE"] - (rng * 1.1 / 2)
+    df["H4"] = (
+        df["CLOSE"]
+        + (price_range * 1.1 / 2)
+    )
+
+    df["L4"] = (
+        df["CLOSE"]
+        - (price_range * 1.1 / 2)
+    )
 
     return df
 
 
 def send_telegram(message):
     url = (
-        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        f"https://api.telegram.org/"
+        f"bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     )
 
     response = requests.post(
@@ -169,8 +260,12 @@ def send_telegram(message):
 
     if response.status_code != 200:
         raise RuntimeError(
-            f"Telegram failed: HTTP {response.status_code} - {response.text}"
+            "Telegram failed: "
+            f"HTTP {response.status_code} - "
+            f"{response.text}"
         )
+
+    print("Telegram message sent successfully.")
 
 
 def main():
@@ -178,43 +273,119 @@ def main():
 
     today_date = datetime.now(IST).date()
 
-    print(f"Checking today's Bhavcopy: {today_date}")
+    print("=" * 50)
+    print("INSIDE CAMARILLA RETRY SCANNER")
+    print(f"Today: {today_date}")
+    print("=" * 50)
 
+    # -------------------------------------------------
     # IMPORTANT:
-    # We intentionally require today's Bhavcopy.
-    # If NSE has not published it yet, this script fails.
-    # The GitHub workflow will then retry after 10 minutes.
-    today_df = get_bhavcopy(session, today_date)
+    # We intentionally require TODAY'S Bhavcopy.
+    # If NSE has not published it yet, this attempt
+    # fails and GitHub retries after 10 minutes.
+    # -------------------------------------------------
 
-    print("Today's Bhavcopy received successfully.")
+    print(
+        f"Checking today's Bhavcopy: "
+        f"{today_date}"
+    )
 
+    today_df = get_bhavcopy(
+        session,
+        today_date
+    )
+
+    print(
+        "Today's Bhavcopy received successfully."
+    )
+
+    # -------------------------------------------------
     # Find previous trading day
-    previous_date = today_date - timedelta(days=1)
+    # -------------------------------------------------
+
+    previous_date = (
+        today_date - timedelta(days=1)
+    )
 
     while True:
         try:
-            print(f"Checking previous trading day: {previous_date}")
-            previous_df = get_bhavcopy(session, previous_date)
+            print(
+                f"Checking previous trading day: "
+                f"{previous_date}"
+            )
+
+            previous_df = get_bhavcopy(
+                session,
+                previous_date
+            )
+
             break
+
         except Exception as e:
-            print(f"{previous_date} unavailable: {e}")
+            print(
+                f"{previous_date} unavailable: {e}"
+            )
+
             previous_date -= timedelta(days=1)
 
+    # -------------------------------------------------
+    # Prepare data
+    # -------------------------------------------------
+
     today_df = prepare_day(today_df)
-    previous_df = prepare_day(previous_df)
 
-    fo_symbols = get_fo_universe(session)
+    previous_df = prepare_day(
+        previous_df
+    )
 
-    print(f"F&O universe: {len(fo_symbols)} symbols")
+    # -------------------------------------------------
+    # Current F&O universe
+    # -------------------------------------------------
 
-    today_df = today_df[today_df["SYMBOL"].isin(fo_symbols)]
-    previous_df = previous_df[previous_df["SYMBOL"].isin(fo_symbols)]
+    fo_symbols = get_fo_universe(
+        session
+    )
 
-    today_df = calculate_camarilla(today_df)
-    previous_df = calculate_camarilla(previous_df)
+    today_df = today_df[
+        today_df["SYMBOL"].isin(
+            fo_symbols
+        )
+    ]
+
+    previous_df = previous_df[
+        previous_df["SYMBOL"].isin(
+            fo_symbols
+        )
+    ]
+
+    print(
+        f"Today's F&O rows: "
+        f"{len(today_df)}"
+    )
+
+    print(
+        f"Previous day's F&O rows: "
+        f"{len(previous_df)}"
+    )
+
+    # -------------------------------------------------
+    # Camarilla levels
+    # -------------------------------------------------
+
+    today_df = calculate_camarilla(
+        today_df
+    )
+
+    previous_df = calculate_camarilla(
+        previous_df
+    )
 
     previous_levels = previous_df[
-        ["SYMBOL", "H4", "L4"]
+        [
+            "SYMBOL",
+            "H4",
+            "L4",
+        ]
     ].rename(
         columns={
             "H4": "PREV_H4",
@@ -228,16 +399,36 @@ def main():
         how="inner"
     )
 
+    # -------------------------------------------------
+    # INSIDE CAMARILLA CONDITION
+    #
+    # Today's H4 <= Yesterday's H4
+    # AND
+    # Today's L4 >= Yesterday's L4
+    # -------------------------------------------------
+
     inside = merged[
-        (merged["H4"] <= merged["PREV_H4"]) &
+        (merged["H4"] <= merged["PREV_H4"])
+        &
         (merged["L4"] >= merged["PREV_L4"])
     ].copy()
 
-    inside = inside.sort_values("SYMBOL")
+    inside = inside.sort_values(
+        "SYMBOL"
+    )
 
-    print(f"Inside Camarilla stocks: {len(inside)}")
+    print(
+        f"Inside Camarilla stocks: "
+        f"{len(inside)}"
+    )
 
-    date_text = today_date.strftime("%d-%m-%Y")
+    # -------------------------------------------------
+    # Telegram message
+    # -------------------------------------------------
+
+    date_text = today_date.strftime(
+        "%d-%m-%Y"
+    )
 
     message = (
         "INSIDE CAMARILLA - RETRY\n"
@@ -245,14 +436,27 @@ def main():
     )
 
     if inside.empty:
+
         message += "No stocks found."
+
     else:
-        message += f"Total: {len(inside)}\n\n"
-        message += "\n".join(inside["SYMBOL"].tolist())
+
+        message += (
+            f"Total: {len(inside)}\n\n"
+        )
+
+        message += "\n".join(
+            inside["SYMBOL"].tolist()
+        )
 
     send_telegram(message)
 
-    print("Telegram message sent successfully.")
+    print("=" * 50)
+    print(
+        "SUCCESS - Scan completed and "
+        "Telegram sent."
+    )
+    print("=" * 50)
 
 
 if __name__ == "__main__":
